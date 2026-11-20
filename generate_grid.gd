@@ -7,6 +7,7 @@ extends TileMapLayer
 
 var cells := {}
 var highlights: Array[Polygon2D] = []
+var selected_unit: Unit = null 
 
 var unit_scene := preload("res://units.tscn")
 var king_data: UnitData = preload("res://Data/Classes/King.tres")
@@ -17,6 +18,22 @@ func _ready() -> void:
 	build_grid()
 	spawn_unit(king_data, 1, Vector2i(offset_x + 3, offset_y + 3))
 	spawn_unit(oracle_data, 1, Vector2i(offset_x + 4, offset_y +2))
+	
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.is_pressed() and event.button_index == MOUSE_BUTTON_LEFT:
+		var cell := local_to_map(get_local_mouse_position())
+		clear_highlights()
+		if cells.has(cell):
+			show_highlight(cell, Color(0.8, 1, 0.1, 0.5))
+			
+			if cells[cell]["Unit"] != null:
+				select_unit(cells[cell]["Unit"])
+			
+			elif selected_unit != null and get_walk_cells(selected_unit).has(cell):
+				move_unit(selected_unit, cell);
+				deselect()
+
 	
 #We might need to save cells into an array, but thats another day/plan.
 func build_grid() -> void:
@@ -37,14 +54,36 @@ func spawn_unit(data: UnitData, player: int, cell: Vector2i) -> void:
 	u.setup(data, player, cell)
 	u.position = cell_center(cell)
 	cells[cell]["Unit"] = u
+		
+		
+func get_walk_cells(unit: Unit) -> Array[Vector2i]:
+	var valid_cells: Array[Vector2i]  = []
+	var pos = unit.cell_coordinates
+	for offset in unit.data.move_pattern:
+		var target_cell = pos + offset
+		if cells.has(target_cell) and cells[target_cell]["Unit"] == null:
+			valid_cells.append(target_cell)
+	
+	return valid_cells
 
 
-func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.is_pressed() and event.button_index == MOUSE_BUTTON_LEFT:
-		var cell := local_to_map(get_local_mouse_position())
-		clear_highlights()
-		if cells.has(cell):
-			show_highlight(cell, Color(0.8, 1, 0.1, 0.5))
+func select_unit(unit: Unit) -> void:
+	selected_unit = unit #Cache the unit
+	#clear_highlights()
+	for cell in get_walk_cells(unit):
+		show_highlight(cell, Color(0.8, 1, 0.1, 0.5))
+		
+		
+func deselect() -> void:
+	selected_unit = null
+	clear_highlights()
+	
+
+func move_unit(unit: Unit, target: Vector2i) -> void:
+	cells[unit.cell_coordinates]["Unit"] = null
+	cells[target]["Unit"] = unit
+	unit.cell_coordinates = target
+	unit.position = cell_center(target)
 
 
 func show_highlight(cell: Vector2i, color: Color) -> void:
@@ -58,7 +97,20 @@ func show_highlight(cell: Vector2i, color: Color) -> void:
 	add_child(h)
 	highlights.append(h)
 
+
 func clear_highlights() -> void:
 	for h in highlights:
 		h.queue_free()
 	highlights.clear()
+
+
+"""
+TODO:
+	-Unhighlights when you click on the same unit 
+	-if you click off the unit, it should no longer be considered "selected_unit"
+		-The unit can be moved without showing the highlighted cells
+	-Fix the z-axis 
+		-Highlight is showing over the units,
+		 and some units appear in front despite being behind
+	-implement Attack tiles
+"""
