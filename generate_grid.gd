@@ -5,6 +5,9 @@ extends TileMapLayer
 @export var offset_x: int = 10
 @export var offset_y: int = -7
 
+@onready var units_node: Node2D = $Units
+@onready var highlights_node: Node2D = $Highlights
+
 var cells := {}
 var highlights: Array[Polygon2D] = []
 var selected_unit: Unit = null 
@@ -23,16 +26,22 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.is_pressed() and event.button_index == MOUSE_BUTTON_LEFT:
 		var cell := local_to_map(get_local_mouse_position())
-		clear_highlights()
-		if cells.has(cell):
-			show_highlight(cell, Color(0.8, 1, 0.1, 0.5))
-			
-			if cells[cell]["Unit"] != null:
-				select_unit(cells[cell]["Unit"])
-			
-			elif selected_unit != null and get_walk_cells(selected_unit).has(cell):
-				move_unit(selected_unit, cell);
+		if not cells.has(cell):
+			deselect()
+			return
+		
+		var clicked_unit = cells[cell]["Unit"]
+
+		if clicked_unit != null:
+			if clicked_unit == selected_unit: #the same unit
 				deselect()
+			else:
+				select_unit(clicked_unit)
+		elif selected_unit != null and get_valid_movement_cells(selected_unit).has(cell):
+			move_unit(selected_unit, cell);
+			deselect()
+		else:
+			deselect()
 
 	
 #We might need to save cells into an array, but thats another day/plan.
@@ -50,28 +59,75 @@ func cell_center(cell: Vector2i) -> Vector2:
 
 func spawn_unit(data: UnitData, player: int, cell: Vector2i) -> void:
 	var u: Unit = unit_scene.instantiate()
-	add_child(u)
+	units_node.add_child(u)
 	u.setup(data, player, cell)
 	u.position = cell_center(cell)
 	cells[cell]["Unit"] = u
 		
 		
-func get_walk_cells(unit: Unit) -> Array[Vector2i]:
-	var valid_cells: Array[Vector2i]  = []
-	var pos = unit.cell_coordinates
-	for offset in unit.data.move_pattern:
-		var target_cell = pos + offset
-		if cells.has(target_cell) and cells[target_cell]["Unit"] == null:
+func get_cells_in_pattern(start: Vector2i, pattern: Array[Vector2i]) -> Array[Vector2i]:
+	var valid_cells: Array[Vector2i] = []
+	for offset in pattern:
+		var target_cell := start + offset
+		if cells.has(target_cell):
 			valid_cells.append(target_cell)
-	
 	return valid_cells
 
+# shared: pattern cells on the board, minus blocked paths
+func get_unblocked_cells(start: Vector2i, pattern: Array[Vector2i], ignore_blocking := false) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for c in get_cells_in_pattern(start, pattern):
+		if ignore_blocking or not is_path_blocked(start, c):
+			result.append(c)
+	return result
+
+# movement rule: destination must be empty
+func get_valid_movement_cells(unit: Unit) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for c in get_unblocked_cells(unit.coordinates, unit.data.move_pattern, unit.data.can_leap):
+		if cells[c]["Unit"] == null:
+			result.append(c)
+	return result
+
+# attack rule: skip your own units (empty cells and enemies are fine)
+func get_valid_attack_cells(unit: Unit, ability: Ability) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	for c in get_unblocked_cells(unit.coordinates, ability.pattern, ability.can_cleave):
+		var other = cells[c]["Unit"]
+		if other == null or other.player != unit.player:
+			result.append(c)
+	return result
+	
+	
+func _step(offset: int, i: int, steps: int) -> int:
+	return signi(offset) * ((2 * absi(offset) * i + steps) / (2*steps))
+
+
+func get_line_between(start: Vector2i, target: Vector2i) -> Array[Vector2i]:
+	var d_cell := target - start
+	var steps := maxi(absi(d_cell.x), absi(d_cell.y))
+	var tiles: Array[Vector2i] = []
+	
+	for i in range(1, steps):
+		tiles.append(Vector2i(
+			start.x + _step(d_cell.x, i, steps), 
+			start.y + _step(d_cell.y, i, steps)
+		))
+	
+	return tiles
+
+
+func is_path_blocked(start: Vector2i, target: Vector2i) -> bool:
+	var path := get_line_between(start, target);
+	return path.any(func(c): return cells[c]["Unit"] != null)
+	
 
 func select_unit(unit: Unit) -> void:
+	clear_highlights()
 	selected_unit = unit #Cache the unit
-	#clear_highlights()
-	for cell in get_walk_cells(unit):
+	for cell in get_valid_movement_cells(unit):
 		show_highlight(cell, Color(0.8, 1, 0.1, 0.5))
+	show_highlight(unit.coordinates, Color(0.8, 1, 0.1, 0.5))
 		
 		
 func deselect() -> void:
@@ -80,9 +136,9 @@ func deselect() -> void:
 	
 
 func move_unit(unit: Unit, target: Vector2i) -> void:
-	cells[unit.cell_coordinates]["Unit"] = null
+	cells[unit.coordinates]["Unit"] = null
 	cells[target]["Unit"] = unit
-	unit.cell_coordinates = target
+	unit.coordinates = target
 	unit.position = cell_center(target)
 
 
@@ -93,8 +149,7 @@ func show_highlight(cell: Vector2i, color: Color) -> void:
 	])
 	h.color = color
 	h.position = map_to_local(cell)
-	h.z_index = 1  # draw above tiles and units
-	add_child(h)
+	highlights_node.add_child(h)
 	highlights.append(h)
 
 
@@ -106,11 +161,5 @@ func clear_highlights() -> void:
 
 """
 TODO:
-	-Unhighlights when you click on the same unit 
-	-if you click off the unit, it should no longer be considered "selected_unit"
-		-The unit can be moved without showing the highlighted cells
-	-Fix the z-axis 
-		-Highlight is showing over the units,
-		 and some units appear in front despite being behind
 	-implement Attack tiles
 """
