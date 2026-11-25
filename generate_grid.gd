@@ -2,46 +2,72 @@ extends TileMapLayer
 
 @export var grid_width: int = 16
 @export var grid_height: int = 16
-@export var offset_x: int = 10
-@export var offset_y: int = -7
+@export var offset_x: int = 25 #10
+@export var offset_y: int = -10 #-7
 
 @onready var units_node: Node2D = $Units
 @onready var highlights_node: Node2D = $Highlights
+@export var attack_menu: MovesetMenu
 
-var cells := {}
-var highlights: Array[Polygon2D] = []
-var selected_unit: Unit = null 
 
 var unit_scene := preload("res://units.tscn")
 var king_data: UnitData = preload("res://Data/Classes/King.tres")
 var oracle_data: UnitData = preload("res://Data/Classes/Esoteric_Oracle.tres")
 
+enum State { IDLE, UNIT_SELECTED, ABILITY_SELECTED }
+var cells := {}
+var highlights: Array[Polygon2D] = []
+var state := State.IDLE
+var selected_unit: Unit = null 
+var selected_ability: Ability = null
+var attack_cells: Array[Vector2i] = []
+
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	build_grid()
+	attack_menu.ability_selected.connect(_on_ability_selected)
 	spawn_unit(king_data, 1, Vector2i(offset_x + 3, offset_y + 3))
-	spawn_unit(oracle_data, 1, Vector2i(offset_x + 4, offset_y +2))
+	spawn_unit(oracle_data, 2, Vector2i(offset_x + 4, offset_y +2))
 	
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.is_pressed() and event.button_index == MOUSE_BUTTON_LEFT:
-		var cell := local_to_map(get_local_mouse_position())
-		if not cells.has(cell):
-			deselect()
-			return
-		
-		var clicked_unit = cells[cell]["Unit"]
+	if not (event is InputEventMouseButton and event.is_pressed() and event.button_index == MOUSE_BUTTON_LEFT):
+		return
 
-		if clicked_unit != null:
-			if clicked_unit == selected_unit: #the same unit
+	var cell := local_to_map(get_local_mouse_position())
+	if not cells.has(cell):
+		deselect()
+		return
+
+	var clicked_unit = cells[cell]["Unit"]
+
+	match state:
+		State.ABILITY_SELECTED:
+			if cell in attack_cells:
+				perform_attack(selected_unit, selected_ability, cell)
+				deselect()
+			elif clicked_unit != null: 
+				select_unit(clicked_unit)
+			else:
+				deselect()
+
+		State.UNIT_SELECTED:
+			if clicked_unit == selected_unit:
+				deselect()
+			elif clicked_unit != null:
+				select_unit(clicked_unit)
+			elif cell in get_valid_movement_cells(selected_unit):
+				move_unit(selected_unit, cell)
 				deselect()
 			else:
+				deselect()
+
+		State.IDLE:
+			if clicked_unit != null:
 				select_unit(clicked_unit)
-		elif selected_unit != null and get_valid_movement_cells(selected_unit).has(cell):
-			move_unit(selected_unit, cell);
-			deselect()
-		else:
-			deselect()
+			else:
+				deselect()
+				show_highlight(cell,Color(0.8, 1, 0.1, 0.5))
 
 	
 #We might need to save cells into an array, but thats another day/plan.
@@ -99,6 +125,21 @@ func get_valid_attack_cells(unit: Unit, ability: Ability) -> Array[Vector2i]:
 	return result
 	
 	
+func _on_ability_selected(ability: Ability) -> void:
+	selected_ability = ability
+	state = State.ABILITY_SELECTED
+	clear_highlights()
+	show_highlight(selected_unit.coordinates, Color(0.8, 1, 0.1, 0.5))
+	attack_cells = get_valid_attack_cells(selected_unit, ability)
+	for c in attack_cells:
+		show_highlight(c, Color(1, 0, 0, 0.5))
+	
+	
+func perform_attack(attacker: Unit, ability: Ability, target_cell: Vector2i) -> void:
+	print(attacker, " used ", ability.ability_name, " on ", target_cell)   # damage goes here later
+	
+	
+@warning_ignore("integer_division")
 func _step(offset: int, i: int, steps: int) -> int:
 	return signi(offset) * ((2 * absi(offset) * i + steps) / (2*steps))
 
@@ -124,15 +165,23 @@ func is_path_blocked(start: Vector2i, target: Vector2i) -> bool:
 
 func select_unit(unit: Unit) -> void:
 	clear_highlights()
-	selected_unit = unit #Cache the unit
-	for cell in get_valid_movement_cells(unit):
-		show_highlight(cell, Color(0.8, 1, 0.1, 0.5))
+	selected_unit = unit
+	selected_ability = null
+	attack_cells.clear()
+	state = State.UNIT_SELECTED
+	for c in get_valid_movement_cells(unit):
+		show_highlight(c, Color(0.8, 1, 0.1, 0.5))
 	show_highlight(unit.coordinates, Color(0.8, 1, 0.1, 0.5))
+	attack_menu.show_for(unit)
 		
 		
 func deselect() -> void:
 	selected_unit = null
+	selected_ability = null
+	attack_cells.clear()
+	state = State.IDLE
 	clear_highlights()
+	attack_menu.hide_menu()
 	
 
 func move_unit(unit: Unit, target: Vector2i) -> void:
@@ -161,5 +210,11 @@ func clear_highlights() -> void:
 
 """
 TODO:
-	-implement Attack tiles
+	-Create the Move UI
+	-implement Attack System
+	-Turn System
+	-Economy:
+		-Passive income
+		-Money Tiles 
+		-How much should it cost for a char to move, upgrade, use moves etc
 """
